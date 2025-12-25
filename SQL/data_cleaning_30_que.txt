@@ -1,0 +1,409 @@
+# 1.Find all orders where discount_pct is less than 0 or greater than 100
+select  * from ecommerce_orders_raw_table 
+where discount_pct < 0 or discount_pct >100;
+
+#2. Find orders where quantity <= 0 OR unit_price <= 0.
+select * from ecommerce_orders_raw_table
+where quantity <=0 or unit_price<=0;
+
+#3. Count how many rows in ecommerce_orders have an invalid or NULL order_date (after
+#parsing).
+
+SELECT *
+FROM ecommerce_orders_raw_table
+WHERE STR_TO_DATE(order_date, '%Y-%m-%d') IS NULL;
+
+SELECT COUNT(*) AS invalid_order_date_count
+FROM ecommerce_orders_raw_table
+WHERE order_date IS NULL
+   OR COALESCE(
+        STR_TO_DATE(order_date, '%Y-%m-%d'),
+        STR_TO_DATE(order_date, '%d-%m-%Y'),
+        STR_TO_DATE(order_date, '%m/%d/%Y'),
+        STR_TO_DATE(order_date, '%d/%b/%Y')
+      ) IS NULL;
+
+# 4.List CRM customers where email is NULL,empty,or does not contain '@' or contains pattern like '..' or '@@'.
+SELECT *
+FROM crm_customer_raw_table
+WHERE email IS NULL
+   OR email = ''
+   OR email NOT LIKE '%@%'
+   or email LIKE '%..%'
+   OR email LIKE '%@@%';          # email contain @@ then show on screen.
+
+
+# 5. Count how many customers have city or state as NULL in crm_customers. Do the same for ecommerce_orders.
+SELECT COUNT(*) AS null_city_or_state
+FROM ecommerce_orders_raw_table
+WHERE city IS NULL 
+   OR state IS NULL;
+
+SELECT COUNT(*) AS null_city_or_state
+FROM crm_customer_raw_table
+WHERE city IS NULL 
+   OR state IS NULL;
+
+-- crm_customers
+SELECT 
+    SUM(city IS NULL) AS customers_city_null,
+    SUM(state IS NULL) AS customers_state_null
+FROM crm_customer_raw_table;
+
+-- ecommerce_orders
+SELECT 
+    SUM(city IS NULL) AS orders_city_null,
+    SUM(state IS NULL) AS orders_state_null
+FROM ecommerce_orders_raw_table;
+
+
+# 6.List distinct gender values from crm_customers and identify which are invalid (not in'Male','Female','Other').
+SELECT DISTINCT gender
+FROM crm_customer_raw_table
+WHERE gender NOT IN ('Male','Female','Other')
+   OR gender IS NULL
+   OR TRIM(gender) = '';
+
+####
+SELECT gender,
+    CASE WHEN gender IN ('Male','Female','Other') THEN 'valid' ELSE 'invalid' END AS validity
+FROM (
+    SELECT DISTINCT gender FROM crm_customer_raw_table
+) as valid_gender ;
+
+
+/* 7. In marketing_events, find rows where event_time is NULL/invalid or event_type is not in
+('open','click','bounce','unsubscribe'). */
+SELECT *
+FROM marketing_events_raw_table
+WHERE event_time IS NULL
+   OR TRIM(event_time) = ''
+   OR STR_TO_DATE(event_time, '%Y-%m-%d %H:%i:%s') IS NULL
+   OR event_type NOT IN ('open','click','bounce','unsubscribe');
+
+### extra
+SELECT *
+FROM marketing_events_raw_table
+WHERE event_time IS NULL
+   OR COALESCE(
+        STR_TO_DATE(event_time, '%Y-%m-%d %H:%i:%s'),
+        STR_TO_DATE(event_time, '%Y-%m-%d'),
+        STR_TO_DATE(event_time, '%d-%m-%Y %H:%i:%s')
+      ) IS NULL
+   OR event_type NOT IN ('open','click','bounce','unsubscribe');
+
+# 8. In support_tickets, list rows where status is not in ('Open','In Progress','Resolved','Closed').
+SELECT *
+FROM support_tickets_raw_table
+WHERE status NOT IN ('Open','In Progress','Resolved','Closed')
+   OR status IS NULL
+   OR TRIM(status) = '';
+
+# 9.Write a query to standardize gender values using CASE,mapping variations of Male/Female to canonical values.
+SELECT 
+    CASE 
+        WHEN LOWER(gender) IN ('male','m') THEN 'Male'
+        WHEN LOWER(gender) IN ('female','f') THEN 'Female'
+        WHEN LOWER(gender) IN ('other','others','o') THEN 'Other'
+        ELSE 'Unknown'
+    END AS standardized_gender
+FROM crm_customer_raw_table;
+
+### extra 
+SELECT
+    crm_customer_id,
+    first_name,
+    last_name,
+    gender AS raw_gender,
+    CASE
+        WHEN gender IS NULL THEN NULL
+        WHEN LOWER(TRIM(gender)) IN ('m','male','man','male ') THEN 'Male'
+        WHEN LOWER(TRIM(gender)) IN ('f','female','woman','female ') THEN 'Female'
+        WHEN LOWER(TRIM(gender)) IN ('other','non-binary','nonbinary','nb') THEN 'Other'
+        ELSE 'Unknown'
+    END AS gender_standardized
+FROM crm_customer_raw_table;
+
+
+/* 10. Create a view clean_orders where discount_pct < 0 is treated as 0 and discount_pct > 80 is
+  capped at 80, and recompute gross_amount and net_amount.*/
+DROP VIEW IF EXISTS clean_orders;
+
+CREATE VIEW clean_orders AS
+SELECT
+    order_id,
+    customer_id,
+    STR_TO_DATE(order_date, '%Y-%m-%d') AS cleaned_order_date,
+    CASE
+        WHEN discount_pct < 0 THEN 0
+        WHEN discount_pct > 80 THEN 80
+        ELSE discount_pct
+    END AS clean_discount_pct,
+    platform,
+    category,
+    quantity,
+    unit_price,
+    (quantity * unit_price) AS gross_amount,
+    (quantity * unit_price) *
+        (1 - (
+            CASE
+                WHEN discount_pct < 0 THEN 0
+                WHEN discount_pct > 80 THEN 80
+                ELSE discount_pct
+            END
+        ) / 100) AS net_amount
+FROM ecommerce_orders_raw_table;
+
+select * from clean_orders;
+-- drop view clean_orderss;
+
+# 11. Create a view or query that adds full_name = CONCAT(first_name, ' ', last_name) in crm_customers.
+CREATE VIEW crm_customers_fullname AS
+SELECT *,
+    CONCAT(first_name, ' ', last_name) AS full_name
+from crm_customer_raw_table ;
+
+select * from crm_customers_fullname;
+-- drop view crm_customers_fullname;
+
+/* 12. Create a view orders_enriched that adds order_year, order_month, order_day, and order_week 
+  extracted from order_date.*/
+CREATE VIEW orders_enriched AS
+select *,
+    YEAR(order_date) AS order_year,
+    MONTH(order_date) AS order_month,
+    DAY(order_date) AS order_day,
+    WEEK(order_date) AS order_week
+FROM ecommerce_orders_raw_table;
+-- drop view orders_enriched;
+
+
+# 13. Create a view orders_normalized that converts platform to lower case and trims any spaces.
+CREATE VIEW orders_normalized AS
+SELECT
+    order_id,
+    customer_id,
+    order_date,
+    TRIM(LOWER(platform)) AS platform,
+    net_amount,
+    discount_pct
+FROM ecommerce_orders_raw_table;
+#drop view orders_normalized;
+select * from orders_normalized;
+
+
+/* 14. Create a view marketing_events_clean that filters out rows with NULL customer_email or
+  invalid event_time and keeps only valid event_type values. */
+CREATE VIEW marketing_events_clean AS
+SELECT *
+FROM marketing_events_raw_table
+WHERE customer_email IS NOT NULL
+  AND TRIM(customer_email) <> ''
+  AND STR_TO_DATE(event_time, '%Y-%m-%d %H:%i:%s') IS NOT NULL
+  AND event_type IN ('open','click','bounce','unsubscribe');
+
+-- drop view marketing_events_clean;
+
+
+/* 15. Join ecommerce_orders with crm_customers to show order_id, order_date, net_amount, order
+  city/state, customer email, and loyalty_tier for orders with matching customers.*/
+SELECT 
+    o.order_id,
+    o.order_date,
+    o.net_amount,
+    o.city AS order_city,
+    o.state AS order_state,	
+    c.email AS customer_email,
+    c.loyalty_tier
+FROM  ecommerce_orders_raw_table o
+left JOIN crm_customer_raw_table c
+    ON o.customer_id = c.crm_customer_id;
+
+# 16. List all customers from crm_customers who have never placed an order in ecommerce_orders.
+SELECT c.*
+FROM crm_customer_raw_table c
+LEFT JOIN ecommerce_orders_raw_table o
+    ON c.crm_customer_id = o.customer_id
+WHERE o.customer_id IS NULL;
+
+/* 17. List distinct customer_id values from ecommerce_orders that do not have a matching record in
+  crm_customers (based on your chosen join key).*/
+SELECT DISTINCT o.customer_id
+FROM ecommerce_orders_raw_table o
+LEFT JOIN crm_customer_raw_table c
+       ON o.customer_id = c.crm_customer_id
+WHERE c.crm_customer_id IS NULL;
+
+
+/* 18. For each customer who placed at least one order in 2025, count how many marketing_events
+  they had (joined via email). */
+SELECT 
+    c.crm_customer_id,
+    c.email,
+    COUNT(m.event_id) AS total_events_2025
+FROM crm_customer_raw_table c
+JOIN ecommerce_orders_raw_table o
+       ON c.crm_customer_id = o.customer_id
+LEFT JOIN marketing_events_raw_table m
+       ON c.email = m.customer_email
+WHERE YEAR(o.order_date) = 2025
+GROUP BY c.crm_customer_id, c.email;
+
+
+/* 19. For each customer, show customer email, total number of support tickets, and counts of open
+  vs resolved tickets. */
+SELECT 
+    c.crm_customer_id,
+    c.email,
+    COUNT(s.ticket_id) AS total_tickets,
+    SUM(s.status = 'Open') AS open_tickets,
+    SUM(s.status = 'Resolved') AS resolved_tickets
+FROM crm_customer_raw_table c
+LEFT JOIN support_tickets_raw_table s
+       ON c.crm_customer_id = s.ticket_id
+GROUP BY c.crm_customer_id, c.email;
+
+
+/* 20. For each customer, show total orders, total marketing 'click' events, and total support tickets;
+   return only customers with at least one click and at least one order.*/
+SELECT 
+    c.crm_customer_id,
+    c.email,
+    COUNT(DISTINCT o.order_id) AS total_orders,
+    SUM(m.event_type = 'click') AS total_clicks,
+    COUNT(s.ticket_id) AS total_support_tickets
+FROM crm_customer_raw_table c
+LEFT JOIN ecommerce_orders_raw_table o
+       ON c.crm_customer_id = o.customer_id
+LEFT JOIN marketing_events_raw_table m
+       ON c.email = m.customer_email
+LEFT JOIN support_tickets_raw_table s
+       ON c.crm_customer_id = s.ticket_id
+GROUP BY c.crm_customer_id, c.email
+HAVING total_orders > 0
+   AND total_clicks > 0;
+
+# 21. Compute total net_amount per city and list the top 10 cities by revenue.
+SELECT 
+    city,
+    SUM(net_amount) AS total_revenue
+FROM ecommerce_orders_raw_table
+GROUP BY city
+ORDER BY total_revenue DESC
+LIMIT 10;
+
+
+# 22. For year 2025, compute total net_amount per category per month.
+SELECT 
+    category,
+    MONTH(order_date) AS month,
+    SUM(net_amount) AS total_net_amount
+FROM ecommerce_orders_raw_table
+WHERE YEAR(order_date) = 2025
+GROUP BY category, MONTH(order_date)
+ORDER BY category, month;
+
+
+# 23. Compute overall average order value (AOV), then AOV per platform (web, android_app,ios_app).
+SELECT 
+    AVG(net_amount) AS overall_AOV
+FROM ecommerce_orders_raw_table;
+
+SELECT 
+    platform,
+    AVG(net_amount) AS AOV
+FROM ecommerce_orders_raw_table
+GROUP BY platform;
+
+
+ /* 24. Compare average net_amount for orders with discount_pct = 0 versus discount_pct > 0. Also
+   compute average discount_pct per category. */
+SELECT 
+    CASE 
+        WHEN discount_pct = 0 THEN 'No Discount'
+        ELSE 'Discount Applied'
+    END AS discount_type,
+    AVG(net_amount) AS avg_net_amount
+FROM ecommerce_orders_raw_table
+GROUP BY discount_type;
+
+SELECT 
+    category,
+    AVG(discount_pct) AS avg_discount_pct
+FROM ecommerce_orders_raw_table
+GROUP BY category;
+
+
+/* 25. For each loyalty_tier, compute number of customers, total revenue (joined with orders), and
+   average orders per customer.*/
+SELECT 
+    c.loyalty_tier,
+    COUNT(DISTINCT c.crm_customer_id) AS num_customers,
+    SUM(o.net_amount) AS total_revenue,
+    COUNT(o.order_id) / COUNT(DISTINCT c.crm_customer_id) AS avg_orders_per_customer
+FROM crm_customer_raw_table c
+LEFT JOIN ecommerce_orders_raw_table o 
+    ON c.crm_customer_id = o.customer_id
+GROUP BY c.loyalty_tier;
+
+/* 26. For each campaign_name in marketing_events, compute total events, percentage of events
+  that are 'click', and the number of unique customers who clicked.*/
+SELECT 
+    campaign_name,
+    COUNT(*) AS total_events,
+    SUM(event_type = 'click') AS total_clicks,
+    (SUM(event_type = 'click') * 100.0 / COUNT(*)) AS pct_clicks,
+    COUNT(DISTINCT CASE WHEN event_type = 'click' THEN Event_id END)
+        AS unique_customers_clicked
+FROM marketing_events_raw_table
+GROUP BY campaign_name;
+
+# 27. For each issue_type in support_tickets, compute number of tickets and percentage that are resolved.
+SELECT 
+    issue_type,
+    COUNT(*) AS total_tickets,
+    SUM(status = 'resolved') AS resolved_tickets,
+    (SUM(status = 'resolved') * 100.0 / COUNT(*)) AS pct_resolved
+FROM support_tickets_raw_table
+GROUP BY issue_type;
+
+/* 28. Identify customers who signed up more than 1 year ago, have no orders in the last 6 months,
+   but have at least 1 marketing event in that period.*/
+SELECT 
+    c.crm_customer_id
+FROM crm_customer_raw_table c
+LEFT JOIN ecommerce_orders_raw_table o
+    ON c.crm_customer_id = o.customer_id 
+    AND o.order_date >= CURDATE() - INTERVAL 6 MONTH
+LEFT JOIN marketing_events_raw_table m
+    ON c.crm_customer_id = m.Event_id
+    AND m.Event_id >= CURDATE() - INTERVAL 6 MONTH
+WHERE c.signup_date < CURDATE() - INTERVAL 1 YEAR
+GROUP BY c.crm_customer_id
+HAVING 
+    COUNT(o.order_id) = 0
+    AND COUNT(m.Event_id) > 0;
+ 
+/* 29. For each customer_id in ecommerce_orders, assign a row number over order_date to identify
+   the 1st, 2nd, 3rd order, etc  */
+SELECT
+    customer_id,
+    order_id,
+    order_date,
+    ROW_NUMBER() OVER(
+        PARTITION BY customer_id 
+        ORDER BY order_date
+    ) AS order_rank
+FROM ecommerce_orders_raw_table;
+
+/* 30. For each customer, compute last_order_date, total_orders, total_revenue (sum of
+   net_amount), and average order value as preparation for RFM analysis. */
+SELECT
+    customer_id,
+    MAX(order_date) AS last_order_date,
+    COUNT(order_id) AS total_orders,
+    SUM(net_amount) AS total_revenue,
+    AVG(net_amount) AS average_order_value
+FROM ecommerce_orders_raw_table
+GROUP BY customer_id
+ORDER BY customer_id;
